@@ -31,8 +31,9 @@
     <Reference Include="System.Management" />
   </ItemGroup>
 
-  <!-- PresentMon 不进仓库（见 tools/README.md），但缺了它打出来的 exe 就没有帧率，
-       过去靠 Condition 静默跳过，结果放出了一版帧率永远显示占位符的包。这里直接报错。 -->
+  <!-- PresentMon 不进仓库（见 tools/README.md），但缺了它打出来的 exe 就没有帧率。
+       以前靠 Condition 静默跳过，能编译通过、只是包小了 1 MB，帧率永远显示占位符，很难发现。
+       现在直接报错。 -->
   <Target Name="CheckPresentMon" BeforeTargets="BeforeBuild">
     <Error Condition="!Exists('$(MSBuildThisFileDirectory)..\tools\PresentMon.exe')"
            Text="缺少 tools\PresentMon.exe：请按 tools/README.md 下载 PresentMon v2.6.0，重命名为 PresentMon.exe 放到 tools\ 下再编译。" />
