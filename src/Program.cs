@@ -690,17 +690,7 @@ namespace Vitals {
 
     private void UpdateFpsMonitor() {
       try {
-        // 进程活着但一条帧都收不到，说明会话没建起来（典型表现：FPS 永远 --）
-        if (_fps.Running && !_fps.HasFrames && _fps.RunningSeconds > 8) {
-          string reason = _fps.LastError;
-          _fps.Stop();
-          if (!_fpsFailLogged && reason.Length > 0) {
-            _fpsFailLogged = true;
-            Log.Write(new Exception("帧率采集失败: " + reason));
-          }
-        }
-        if (!_fps.Running) _fps.Start();
-
+        if (!_fps.Running && !_fps.Started) _fps.Start();
         string name = ForegroundName();
         if (name.Length > 0) _fpsTarget = name;
       } catch {
@@ -1051,10 +1041,20 @@ namespace Vitals {
       new Dictionary<string, Queue<Frame>>(StringComparer.OrdinalIgnoreCase);
     private readonly object _lock = new object();
     private int _startedTicks;
+    private volatile bool _shouldRun;
+    private Thread _supervisor;
+    private double _lastFps, _lastLowFps;
+    private string _lastFpsName = "";
+    private int _lastFpsTicks;
     public string LastError = "";
 
     public bool Running {
       get { Process process = _process; return process != null && !process.HasExited; }
+    }
+
+    // 采集线程是否在跑（启动后一直为 true，单轮结束不代表停止）
+    public bool Started {
+      get { return _supervisor != null; }
     }
 
     // 子进程是否真的产出了帧：卡死时进程活着但一条数据都没有
@@ -1067,7 +1067,46 @@ namespace Vitals {
     }
 
     public bool Start() {
-      if (Running) return true;
+      if (_supervisor != null) return true;
+      _shouldRun = true;
+      _supervisor = new Thread(Supervise) { IsBackground = true };
+      _supervisor.Start();
+      return true;
+    }
+
+    // 采集一轮结束就立刻接着下一轮，尽量压掉空档
+    private void Supervise() {
+      while (_shouldRun) {
+        bool produced = false;
+        try {
+          if (!LaunchOnce()) { Thread.Sleep(2000); continue; }
+          Process process = _process;
+          if (process != null) {
+            process.WaitForExit(15000);
+            produced = HasFrames;
+          }
+        } catch { }
+
+        Prune();
+        if (!_shouldRun) break;
+        // 这一轮一帧都没拿到，说明会话没建起来，退避一下再试，避免疯狂重启
+        Thread.Sleep(produced ? 150 : 2500);
+      }
+    }
+
+    private void Prune() {
+      double now = Environment.TickCount;
+      lock (_lock) {
+        var dead = new List<string>();
+        foreach (var pair in _byName) {
+          while (pair.Value.Count > 0 && now - pair.Value.Peek().Tick > 5000) pair.Value.Dequeue();
+          if (pair.Value.Count == 0) dead.Add(pair.Key);
+        }
+        foreach (string key in dead) _byName.Remove(key);
+      }
+    }
+
+    private bool LaunchOnce() {
       try {
         string exe = ExtractPresentMon();
         if (exe == null) { LastError = "无法释放 PresentMon"; return false; }
@@ -1091,7 +1130,6 @@ namespace Vitals {
         _process = Process.Start(info);
         if (_process == null) { LastError = "PresentMon 启动失败"; return false; }
 
-        lock (_lock) { _byName.Clear(); }
         _startedTicks = Environment.TickCount;
 
         _reader = new Thread(ReadLoop) { IsBackground = true };
@@ -1102,12 +1140,13 @@ namespace Vitals {
         return true;
       } catch (Exception ex) {
         LastError = ex.Message;
-        Stop();
         return false;
       }
     }
 
     public void Stop() {
+      _shouldRun = false;
+      _supervisor = null;
       Process process = _process;
       _process = null;
       if (process != null) {
@@ -1115,11 +1154,30 @@ namespace Vitals {
         try { process.Dispose(); } catch { }
       }
       lock (_lock) { _byName.Clear(); }
+      _lastFps = 0;
+      _lastLowFps = 0;
+      _lastFpsName = "";
     }
 
     // 取某个进程名最近 2 秒的平均帧率，0 表示没有帧
     public double GetFps(string processName) {
       if (string.IsNullOrEmpty(processName)) return 0;
+      double value = ComputeFps(processName);
+      int now = Environment.TickCount;
+      if (value > 0) {
+        _lastFps = value;
+        _lastFpsName = processName;
+        _lastFpsTicks = now;
+        return value;
+      }
+      // 两次采集之间会有短暂空档，保持上一个值，避免读数在 FPS 和 -- 之间来回跳
+      if (processName.Equals(_lastFpsName, StringComparison.OrdinalIgnoreCase)
+          && _lastFps > 0 && unchecked(now - _lastFpsTicks) < 6000)
+        return _lastFps;
+      return 0;
+    }
+
+    private double ComputeFps(string processName) {
       lock (_lock) {
         Queue<Frame> queue;
         if (!_byName.TryGetValue(processName, out queue) || queue.Count < 3) return 0;
@@ -1137,6 +1195,19 @@ namespace Vitals {
     // 1% low：取最近 2 秒内最慢的 1% 帧，换算成等效帧率
     public double GetLowFps(string processName) {
       if (string.IsNullOrEmpty(processName)) return 0;
+      double value = ComputeLowFps(processName);
+      int now = Environment.TickCount;
+      if (value > 0) {
+        _lastLowFps = value;
+        return value;
+      }
+      if (processName.Equals(_lastFpsName, StringComparison.OrdinalIgnoreCase)
+          && _lastLowFps > 0 && unchecked(now - _lastFpsTicks) < 6000)
+        return _lastLowFps;
+      return 0;
+    }
+
+    private double ComputeLowFps(string processName) {
       lock (_lock) {
         Queue<Frame> queue;
         if (!_byName.TryGetValue(processName, out queue) || queue.Count < 20) return 0;
