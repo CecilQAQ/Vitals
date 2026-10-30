@@ -99,9 +99,9 @@ msbuild src\Vitals.csproj /p:Configuration=Release
 本项目以 GNU General Public License v3.0 发布。你可以自由使用、修改、分发，
 但分发（包括修改后的版本）时必须同样以 GPL-3.0 开源并提供完整源码，不得闭源发布。
 
-选择 GPL-3 是为了与作者的另一款工具
+选择 GPL-3 是为了与同类工具
 [OmenSuperHub](https://github.com/breadeding/OmenSuperHub) 保持许可一致，
-两者之间可以互相借用代码。
+两者在实现思路上有交集，日后若要互相借用代码不会有冲突。
 
 ## 第三方组件
 
