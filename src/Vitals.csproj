@@ -13,7 +13,9 @@
     <DebugType>none</DebugType>
     <Optimize>true</Optimize>
     <Deterministic>true</Deterministic>
-    <Version>1.0.0</Version>
+    <Version>1.0.3</Version>
+    <FileVersion>1.0.3.0</FileVersion>
+    <AssemblyVersion>1.0.3.0</AssemblyVersion>
     <Product>Vitals</Product>
     <AssemblyTitle>Vitals 硬件监测</AssemblyTitle>
     <NoWarn>$(NoWarn);CS0169</NoWarn>
@@ -22,11 +24,18 @@
   <ItemGroup>
     <EmbeddedResource Include="IntelMSR.bin" LogicalName="Vitals.IntelMSR.bin" />
     <EmbeddedResource Include="app.ico" LogicalName="Vitals.app.ico" />
-    <EmbeddedResource Include="..\tools\PresentMon.exe" LogicalName="Vitals.PresentMon.exe" Condition="Exists('..\tools\PresentMon.exe')" />
+    <EmbeddedResource Include="..\tools\PresentMon.exe" LogicalName="Vitals.PresentMon.exe" />
   </ItemGroup>
 
   <ItemGroup>
     <Reference Include="System.Management" />
   </ItemGroup>
+
+  <!-- PresentMon 不进仓库（见 tools/README.md），但缺了它打出来的 exe 就没有帧率，
+       过去靠 Condition 静默跳过，结果放出了一版帧率永远显示占位符的包。这里直接报错。 -->
+  <Target Name="CheckPresentMon" BeforeTargets="BeforeBuild">
+    <Error Condition="!Exists('$(MSBuildThisFileDirectory)..\tools\PresentMon.exe')"
+           Text="缺少 tools\PresentMon.exe：请按 tools/README.md 下载 PresentMon v2.6.0，重命名为 PresentMon.exe 放到 tools\ 下再编译。" />
+  </Target>
 
 </Project>

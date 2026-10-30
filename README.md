@@ -62,6 +62,9 @@
 
 帧率采集**不注入游戏进程**，不会触发反作弊；1% low 取最近 2 秒内最慢 1% 帧的等效帧率。
 
+程序只维护**一个常驻的 PresentMon 子进程**：启动前清掉上次异常退出留下的 ETW 会话和孤儿进程，
+采集卡住（几秒没有新帧、事件丢失、子进程退出）会自动重启，原因写进 `Vitals.log`。
+
 ---
 
 ## 从源码构建
@@ -78,7 +81,25 @@ msbuild src\Vitals.csproj /p:Configuration=Release
 
 产物在 `src\bin\Release\`。
 
+缺少 `tools/PresentMon.exe` 时编译会直接报错停下 —— 少了它 exe 里就没有帧率采集能力，
+不允许再打出一个帧率永远是 `--` 的包。
+
 `src/IntelMSR.bin` 是 PawnIO 的 MSR 模块，随源码提供（见 `THIRD-PARTY-NOTICES.md`）。
+
+### 打发布包
+
+发布包的内容（`dist/` 里是随仓库提供的说明和脚本）：
+
+```
+Vitals.exe
+使用说明.txt                                  ← dist/
+关闭Vitals进程.bat                            ← dist/
+清理Vitals.bat                                ← dist/
+PawnIO（未安装过需先安装，安装过可删除）\
+    PawnIO_setup.exe                          ← PawnIO 官方安装包，体积大，不随仓库提供
+```
+
+把它们按上面的层级放好，压成 `Vitals-v<版本>.zip` 即可发布。
 
 ---
 
@@ -89,6 +110,16 @@ msbuild src\Vitals.csproj /p:Configuration=Release
 - **没有显存温度**：消费级显卡基本不提供该传感器（`nvidia-smi` 里也是 N/A）
 - **需要管理员**：读 MSR 的硬性要求；即使只用 GPU / 内存部分也要提权
 - **帧率可能抓不到**：极少数自绘呈现引擎（部分 Vulkan / 私有管线）不会产生 DXGI 呈现事件
+
+---
+
+## 更新日志
+
+- **1.0.3** —— 帧率采集改为常驻单个 PresentMon 进程；启动前清掉残留的 ETW 会话和孤儿进程，
+  采集失活自动重启。修掉残留会话累积之后帧率一直显示 `--` 的问题
+- **1.0.2** —— 帧率读数在采集间隙沿用上一个值，不再每 3 秒闪一下 `--`
+- **1.0.1** —— 帧率采集改为短周期自终止，会话名唯一化，失败原因写进日志
+- **1.0.0** —— 首个版本
 
 ---
 

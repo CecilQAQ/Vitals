@@ -1491,24 +1491,36 @@ namespace Vitals {
         if (_exePath != null && File.Exists(_exePath)) return _exePath;
 
         string path = Path.Combine(dir, "PresentMon.exe");
-        try {
-          if (File.Exists(path)) {
+        // 优先用内嵌的那份：临时目录里留着的是旧 exe 解出来的旧版本，不能让它盖过当前版本
+        if (HasPresentMonResource()) {
+          try {
+            CopyResource(path);
             _exePath = path;
             return path;
+          } catch {
+            // 共享副本被占用（例如清理不掉的旧进程）就退回带进程号的独立副本
+            string alt = Path.Combine(dir, "PresentMon-" + Process.GetCurrentProcess().Id + ".exe");
+            CopyResource(alt);
+            _exePath = alt;
+            return alt;
           }
-          CopyResource(path);
+        }
+
+        // 没内嵌（源码编译时漏了 tools\PresentMon.exe）就退回已有的临时副本
+        if (File.Exists(path)) {
           _exePath = path;
           return path;
-        } catch {
-          // 共享副本被占用（例如清理不掉的旧进程）就退回带进程号的独立副本
-          string alt = Path.Combine(dir, "PresentMon-" + Process.GetCurrentProcess().Id + ".exe");
-          CopyResource(alt);
-          _exePath = alt;
-          return alt;
         }
+        Log.Write("帧率不可用：exe 里没有内嵌 PresentMon，临时目录下也没有副本");
+        return null;
       } catch {
         return null;
       }
+    }
+
+    private static bool HasPresentMonResource() {
+      try { return Assembly.GetExecutingAssembly().GetManifestResourceStream("Vitals.PresentMon.exe") != null; }
+      catch { return false; }
     }
 
     private static void CopyResource(string path) {
