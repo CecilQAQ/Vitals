@@ -425,6 +425,7 @@ namespace Vitals {
     private string _fpsTarget = "";
     private int _currentProfile;
     private int _sampling;
+    private bool _fpsFailLogged;
 
     public TrayApp() {
       _overlay = new OverlayForm();
@@ -689,7 +690,17 @@ namespace Vitals {
 
     private void UpdateFpsMonitor() {
       try {
+        // 进程活着但一条帧都收不到，说明会话没建起来（典型表现：FPS 永远 --）
+        if (_fps.Running && !_fps.HasFrames && _fps.RunningSeconds > 8) {
+          string reason = _fps.LastError;
+          _fps.Stop();
+          if (!_fpsFailLogged && reason.Length > 0) {
+            _fpsFailLogged = true;
+            Log.Write(new Exception("帧率采集失败: " + reason));
+          }
+        }
         if (!_fps.Running) _fps.Start();
+
         string name = ForegroundName();
         if (name.Length > 0) _fpsTarget = name;
       } catch {
@@ -1039,29 +1050,38 @@ namespace Vitals {
     private readonly Dictionary<string, Queue<Frame>> _byName =
       new Dictionary<string, Queue<Frame>>(StringComparer.OrdinalIgnoreCase);
     private readonly object _lock = new object();
+    private int _startedTicks;
     public string LastError = "";
 
     public bool Running {
       get { Process process = _process; return process != null && !process.HasExited; }
     }
 
+    // 子进程是否真的产出了帧：卡死时进程活着但一条数据都没有
+    public bool HasFrames {
+      get { lock (_lock) { return _byName.Count > 0; } }
+    }
+
+    public int RunningSeconds {
+      get { return (int)((Environment.TickCount - _startedTicks) / 1000); }
+    }
+
     public bool Start() {
       if (Running) return true;
       try {
-        // 上一次被强杀后残留的 PresentMon 会占着全局对象，导致新实例收不到任何帧
-        foreach (Process stale in Process.GetProcessesByName("PresentMon")) {
-          try { stale.Kill(); stale.WaitForExit(1000); } catch { }
-        }
-
         string exe = ExtractPresentMon();
         if (exe == null) { LastError = "无法释放 PresentMon"; return false; }
 
         var info = new ProcessStartInfo {
           FileName = exe,
           // 不加 --process_name，采集全部进程；窗口切换时不需要重启
+          // 会话名必须每次唯一：残留的同名会话会让 PresentMon 直接拒绝启动
+          // （日志里报 "Use --session_name with a different name to start a new session"）
+          // 用 --timed 短周期自终止，而不是常驻长会话：单次失败不会永久卡死，会话也不会累积
           Arguments = "--output_stdout --no_console_stats --v1_metrics" +
-                      " --no_track_gpu --no_track_display --no_track_input" +
-                      " --stop_existing_session --session_name VitalsFps" + Process.GetCurrentProcess().Id,
+                      " --timed 2 --terminate_after_timed" +
+                      " --stop_existing_session --session_name VMon" +
+                      (Environment.TickCount & 0xFFFFF).ToString("X"),
           UseShellExecute = false,
           RedirectStandardOutput = true,
           RedirectStandardError = true,
@@ -1072,9 +1092,13 @@ namespace Vitals {
         if (_process == null) { LastError = "PresentMon 启动失败"; return false; }
 
         lock (_lock) { _byName.Clear(); }
+        _startedTicks = Environment.TickCount;
 
         _reader = new Thread(ReadLoop) { IsBackground = true };
         _reader.Start();
+
+        var errReader = new Thread(ReadErrorLoop) { IsBackground = true };
+        errReader.Start(_process);
         return true;
       } catch (Exception ex) {
         LastError = ex.Message;
@@ -1144,6 +1168,18 @@ namespace Vitals {
         list.AddRange(_byName.Keys);
         return list;
       }
+    }
+
+    // 必须把 stderr 读空，否则管道写满会让 PresentMon 卡住
+    private void ReadErrorLoop(object state) {
+      var process = state as Process;
+      if (process == null) return;
+      try {
+        string line;
+        while ((line = process.StandardError.ReadLine()) != null) {
+          if (line.Trim().Length > 0) LastError = line.Trim();
+        }
+      } catch { }
     }
 
     private void ReadLoop() {
