@@ -1685,7 +1685,7 @@ namespace Vitals {
     }
   }
 
-  // 通过 HP BIOS 的 WMI 接口读风扇档位（与 OSH 相同的命令）
+  // 通过 HP BIOS 的 WMI 接口读风扇档位（hpqBIntM，命令 0x2D）
   internal static class HpBios {
     private static ManagementObject _methods;
     private static ManagementClass _inClass;
