@@ -426,6 +426,8 @@ namespace Vitals {
     private int _currentProfile;
     private int _sampling;
     private bool _fpsFailLogged;
+    private int _fpsDiagTicks;
+    private string _fpsDiagName = "";
 
     public TrayApp() {
       _overlay = new OverlayForm();
@@ -693,8 +695,32 @@ namespace Vitals {
         if (!_fps.Running && !_fps.Started) _fps.Start();
         string name = ForegroundName();
         if (name.Length > 0) _fpsTarget = name;
+        DiagnoseFps();
       } catch {
       }
+    }
+
+    // 帧率一直 -- 时把 PresentMon 实际收到了哪些进程的帧写进日志，
+    // 用来区分"根本没采到帧"和"进程名对不上"
+    private void DiagnoseFps() {
+      int now = Environment.TickCount;
+      if (unchecked(now - _fpsDiagTicks) < 60000) return;
+      _fpsDiagTicks = now;
+      if (!_fps.Started) return;
+
+      var names = new List<string>(_fps.Names());
+      if (names.Count == 0) {
+        if (_fps.RunningSeconds >= 15)
+          Log.Write("帧率无数据：已运行 " + _fps.RunningSeconds + " 秒没收到任何帧；" + _fps.LastError);
+        return;
+      }
+
+      foreach (string n in names) {
+        if (n.Equals(_fpsTarget, StringComparison.OrdinalIgnoreCase)) return;
+      }
+      if (_fpsDiagName == _fpsTarget) return;   // 同一个前台进程名只记一次
+      _fpsDiagName = _fpsTarget;
+      Log.Write("帧率无匹配：前台=" + _fpsTarget + "，PresentMon 只有 [" + string.Join(",", names.ToArray()) + "]");
     }
 
     private double Peak(string key, double value) {
@@ -1043,13 +1069,18 @@ namespace Vitals {
     private int _startedTicks;
     private volatile bool _shouldRun;
     private Thread _supervisor;
+    private string _session = "";
+    private volatile int _frameTicks;
+    private volatile int _framesTotal;
+    private volatile string _stderrTail = "";
+    private bool _lossLogged;
     private double _lastFps, _lastLowFps;
     private string _lastFpsName = "";
     private int _lastFpsTicks;
     public string LastError = "";
 
     public bool Running {
-      get { Process process = _process; return process != null && !process.HasExited; }
+      get { Process process = _process; try { return process != null && !process.HasExited; } catch { return false; } }
     }
 
     // 采集线程是否在跑（启动后一直为 true，单轮结束不代表停止）
@@ -1057,41 +1088,73 @@ namespace Vitals {
       get { return _supervisor != null; }
     }
 
-    // 子进程是否真的产出了帧：卡死时进程活着但一条数据都没有
+    // 本次采集是否真的产出了帧：进程活着但一条数据都没有时用来自愈
     public bool HasFrames {
-      get { lock (_lock) { return _byName.Count > 0; } }
+      get { return _framesTotal > 0; }
     }
 
     public int RunningSeconds {
-      get { return (int)((Environment.TickCount - _startedTicks) / 1000); }
+      get { return (int)(unchecked(Environment.TickCount - _startedTicks) / 1000); }
     }
 
     public bool Start() {
       if (_supervisor != null) return true;
+      _startedTicks = Environment.TickCount;
       _shouldRun = true;
-      _supervisor = new Thread(Supervise) { IsBackground = true };
-      _supervisor.Start();
+      var supervisor = new Thread(Supervise) { IsBackground = true };
+      _supervisor = supervisor;
+      supervisor.Start();
       return true;
     }
 
-    // 采集一轮结束就立刻接着下一轮，尽量压掉空档
+    // 常驻一个 PresentMon，帧流连续；只有它退出或者长时间不出帧才重启。
+    // 旧实现每 2 秒重启一次采集，被 kill 的 PresentMon 会把它建的 ETW 会话留在系统里。
+    // 残留会话累积之后新会话会丢掉全部事件（stderr: "N ETW events were lost"），
+    // 于是一条数据都收不到，FPS 永久显示 --。所以每次重启前必须清掉残留会话。
     private void Supervise() {
+      CleanupStaleSessions();
       while (_shouldRun) {
-        bool produced = false;
-        try {
-          if (!LaunchOnce()) { Thread.Sleep(2000); continue; }
-          Process process = _process;
-          if (process != null) {
-            process.WaitForExit(15000);
-            produced = HasFrames;
-          }
-        } catch { }
+        if (!LaunchOnce()) {
+          if (!_shouldRun) break;
+          Thread.Sleep(3000);
+          continue;
+        }
 
-        Prune();
+        string reason = "";
+        Process process = _process;
+        int start = Environment.TickCount;
+        int tick = 0;
+        while (_shouldRun) {
+          bool exited;
+          try { exited = process == null || process.HasExited; } catch { exited = true; }
+          if (exited) { reason = "PresentMon 已退出"; break; }
+
+          int now = Environment.TickCount;
+          string tail = _stderrTail;
+          bool loss = tail.IndexOf("lost", StringComparison.OrdinalIgnoreCase) >= 0;
+
+          if (_frameTicks != 0) {
+            if (unchecked(now - _frameTicks) > 6000) { reason = "6 秒没有新帧"; break; }
+          } else if (loss && unchecked(now - start) > 4000) {
+            reason = "ETW 事件全部丢失（" + tail + "）";
+            break;
+          } else if (unchecked(now - start) > 12000) {
+            reason = "启动 12 秒仍无帧" + (tail.Length > 0 ? "（" + tail + "）" : "");
+            break;
+          }
+
+          if ((tick++ & 3) == 0) Prune();
+          Thread.Sleep(250);
+        }
+
+        CloseCurrent();
         if (!_shouldRun) break;
-        // 这一轮一帧都没拿到，说明会话没建起来，退避一下再试，避免疯狂重启
-        Thread.Sleep(produced ? 150 : 2500);
+        LastError = reason;
+        Log.Write("帧率采集重启：" + reason + "，本次采到 " + _framesTotal + " 帧");
+        CleanupStaleSessions();
+        Thread.Sleep(700);
       }
+      CloseCurrent();
     }
 
     private void Prune() {
@@ -1109,26 +1172,31 @@ namespace Vitals {
     private bool LaunchOnce() {
       try {
         string exe = ExtractPresentMon();
-        if (exe == null) { LastError = "无法释放 PresentMon"; return false; }
+        if (exe == null) { LastError = "无法释放 PresentMon"; Log.Write("帧率采集失败：" + LastError); return false; }
+
+        // 会话名每次唯一：万一上次的会话没停干净，同名会让 PresentMon 直接拒绝启动
+        _session = "VMon" + (Environment.TickCount & 0xFFFFF).ToString("X");
 
         var info = new ProcessStartInfo {
           FileName = exe,
-          // 不加 --process_name，采集全部进程；窗口切换时不需要重启
-          // 会话名必须每次唯一：残留的同名会话会让 PresentMon 直接拒绝启动
-          // （日志里报 "Use --session_name with a different name to start a new session"）
-          // 用 --timed 短周期自终止，而不是常驻长会话：单次失败不会永久卡死，会话也不会累积
+          // 不加 --process_name，采集全部进程；窗口切换时不需要重启。
+          // 不加 --timed：让它一直跑，帧是连续的，滑窗算出来的帧率不会周期性掉一下
           Arguments = "--output_stdout --no_console_stats --v1_metrics" +
-                      " --timed 2 --terminate_after_timed" +
-                      " --stop_existing_session --session_name VMon" +
-                      (Environment.TickCount & 0xFFFFF).ToString("X"),
+                      " --stop_existing_session --session_name " + _session,
           UseShellExecute = false,
           RedirectStandardOutput = true,
           RedirectStandardError = true,
           CreateNoWindow = true
         };
 
+        _framesTotal = 0;
+        _frameTicks = 0;
+        _stderrTail = "";
+        _lossLogged = false;
+        lock (_lock) { _byName.Clear(); }
+
         _process = Process.Start(info);
-        if (_process == null) { LastError = "PresentMon 启动失败"; return false; }
+        if (_process == null) { LastError = "PresentMon 启动失败"; Log.Write("帧率采集失败：" + LastError); return false; }
 
         _startedTicks = Environment.TickCount;
 
@@ -1140,20 +1208,127 @@ namespace Vitals {
         return true;
       } catch (Exception ex) {
         LastError = ex.Message;
+        Log.Write("帧率采集失败：" + ex.Message);
         return false;
       }
+    }
+
+    // 只 kill 不 stop 的话，PresentMon 建的 ETW 会话会一直留在系统里
+    private void CloseCurrent() {
+      Process process = _process;
+      _process = null;
+      if (process != null) {
+        try { if (!process.HasExited) process.Kill(); } catch { }
+        try { process.WaitForExit(3000); } catch { }
+        try { process.Dispose(); } catch { }
+      }
+      string session = _session;
+      _session = "";
+      StopSession(session);
+    }
+
+    // 会话名形如 VMon1A2B3 / VDiag4C5D，只认这种，绝不碰系统里的其它跟踪会话
+    private static bool IsOurSession(string name) {
+      if (name == null) return false;
+      if (!name.StartsWith("VMon", StringComparison.OrdinalIgnoreCase)
+          && !name.StartsWith("VDiag", StringComparison.OrdinalIgnoreCase)) return false;
+      if (name.Length <= 5 || name.Length > 16) return false;
+      for (int i = 4; i < name.Length; i++) {
+        char c = name[i];
+        bool hex = (c >= '0' && c <= '9') || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F');
+        if (!hex) return false;
+      }
+      return true;
+    }
+
+    // 清掉本程序以前遗留的采集会话；不清的话残留会话会让新会话丢掉全部事件
+    private static void CleanupStaleSessions() {
+      KillOrphanPresentMon();
+      try {
+        int stopped = 0;
+        foreach (string name in QuerySessions()) {
+          if (!IsOurSession(name)) continue;
+          if (RunLogman("stop \"" + name + "\" -ets")) stopped++;
+        }
+        if (stopped > 0) Log.Write("清理残留 ETW 会话 " + stopped + " 个");
+      } catch { }
+    }
+
+    // 程序被强杀时 PresentMon 会变成孤儿进程，它建的会话也跟着留在系统里；
+    // 只认 %TEMP%\Vitals 下我们自己释放的副本，不碰别的工具
+    private static void KillOrphanPresentMon() {
+      string dir = Path.Combine(Path.GetTempPath(), "Vitals") + Path.DirectorySeparatorChar;
+      Process[] all;
+      try { all = Process.GetProcessesByName("PresentMon"); } catch { return; }
+
+      foreach (Process process in all) {
+        try {
+          string path = null;
+          try { path = process.MainModule.FileName; } catch { }
+          if (path == null) continue;
+          if (!path.StartsWith(dir, StringComparison.OrdinalIgnoreCase)) continue;
+          process.Kill();
+          Log.Write("清掉残留的 PresentMon 进程 " + process.Id);
+        } catch { }
+        finally { try { process.Dispose(); } catch { } }
+      }
+    }
+
+    private static void StopSession(string session) {
+      if (string.IsNullOrEmpty(session) || !IsOurSession(session)) return;
+      RunLogman("stop \"" + session + "\" -ets");
+    }
+
+    private static List<string> QuerySessions() {
+      var names = new List<string>();
+      try {
+        var info = new ProcessStartInfo("logman.exe", "query -ets") {
+          UseShellExecute = false,
+          RedirectStandardOutput = true,
+          RedirectStandardError = true,
+          CreateNoWindow = true
+        };
+        using (Process process = Process.Start(info)) {
+          if (process == null) return names;
+          string output = process.StandardOutput.ReadToEnd();
+          process.StandardError.ReadToEnd();
+          process.WaitForExit(8000);
+          foreach (string raw in output.Split('\n')) {
+            string line = raw.Trim();
+            if (line.Length == 0) continue;
+            string name = line.Split(new char[] { ' ', '\t' }, 2)[0];
+            if (name.Length > 0) names.Add(name);
+          }
+        }
+      } catch { }
+      return names;
+    }
+
+    private static bool RunLogman(string arguments) {
+      try {
+        var info = new ProcessStartInfo("logman.exe", arguments) {
+          UseShellExecute = false,
+          RedirectStandardOutput = true,
+          RedirectStandardError = true,
+          CreateNoWindow = true
+        };
+        using (Process process = Process.Start(info)) {
+          if (process == null) return false;
+          process.StandardOutput.ReadToEnd();
+          process.StandardError.ReadToEnd();
+          if (!process.WaitForExit(8000)) { try { process.Kill(); } catch { } return false; }
+          return process.ExitCode == 0;
+        }
+      } catch { return false; }
     }
 
     public void Stop() {
       _shouldRun = false;
       _supervisor = null;
-      Process process = _process;
-      _process = null;
-      if (process != null) {
-        try { if (!process.HasExited) process.Kill(); } catch { }
-        try { process.Dispose(); } catch { }
-      }
+      CloseCurrent();
       lock (_lock) { _byName.Clear(); }
+      _framesTotal = 0;
+      _frameTicks = 0;
       _lastFps = 0;
       _lastLowFps = 0;
       _lastFpsName = "";
@@ -1248,7 +1423,14 @@ namespace Vitals {
       try {
         string line;
         while ((line = process.StandardError.ReadLine()) != null) {
-          if (line.Trim().Length > 0) LastError = line.Trim();
+          string text = line.Trim();
+          if (text.Length == 0) continue;
+          LastError = text;
+          _stderrTail = text;
+          if (!_lossLogged && text.IndexOf("lost", StringComparison.OrdinalIgnoreCase) >= 0) {
+            _lossLogged = true;
+            Log.Write("PresentMon: " + text);
+          }
         }
       } catch { }
     }
@@ -1293,6 +1475,8 @@ namespace Vitals {
             queue.Enqueue(new Frame { Tick = now, Ms = ms });
             // 只保留最近 3 秒，避免长时间运行累积
             while (queue.Count > 0 && now - queue.Peek().Tick > 3000) queue.Dequeue();
+            _frameTicks = Environment.TickCount;
+            _framesTotal++;
           }
         }
       } catch {
@@ -1781,12 +1965,20 @@ namespace Vitals {
 
   // 崩溃日志
   internal static class Log {
+    public static void Write(string message) {
+      Append(message == null ? "unknown" : message);
+    }
+
     public static void Write(Exception ex) {
+      Append(ex == null ? "unknown" : ex.ToString());
+    }
+
+    private static void Append(string message) {
       try {
         string dir = Path.GetDirectoryName(Application.ExecutablePath);
         string path = Path.Combine(string.IsNullOrEmpty(dir) ? Path.GetTempPath() : dir, "Vitals.log");
         File.AppendAllText(path,
-          DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss") + " " + (ex == null ? "unknown" : ex.ToString()) + Environment.NewLine,
+          DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss") + " " + message + Environment.NewLine,
           new UTF8Encoding(false));
       } catch { }
     }
