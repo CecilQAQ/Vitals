@@ -1,5 +1,10 @@
 # Vitals
 
+![License](https://img.shields.io/badge/license-GPL--3.0-blue)
+![Platform](https://img.shields.io/badge/platform-Windows%2010%20%2F%2011-lightgrey)
+![.NET](https://img.shields.io/badge/.NET%20Framework-4.8-purple)
+![Arch](https://img.shields.io/badge/arch-x64-informational)
+
 一个极轻量的 Windows 硬件监测工具：桌面悬浮条 + 托盘提示，实时显示 **CPU / GPU 的温度、功耗、频率、占用，显存、风扇转速、磁盘与网络速率、内存、电池，以及当前窗口的帧率**。
 
 ![screenshot](docs/screenshot.png)
@@ -89,7 +94,14 @@ msbuild src\Vitals.csproj /p:Configuration=Release
 
 ## 许可证
 
-[MIT](LICENSE)
+[GPL-3.0](LICENSE)
+
+本项目以 GNU General Public License v3.0 发布。你可以自由使用、修改、分发，
+但分发（包括修改后的版本）时必须同样以 GPL-3.0 开源并提供完整源码，不得闭源发布。
+
+选择 GPL-3 是为了与作者的另一款工具
+[OmenSuperHub](https://github.com/breadeding/OmenSuperHub) 保持许可一致，
+两者之间可以互相借用代码。
 
 ## 第三方组件
 

@@ -1,0 +1,39 @@
+name: 功能建议
+description: 想要新的监测项、新的显示方式，或者其它改进
+title: "[Feature] "
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        提交前可以先去 Issues 里搜一下，避免重复。
+
+  - type: textarea
+    id: need
+    attributes:
+      label: 你希望解决什么问题
+      description: 先描述场景，再说具体想要的功能，这样更容易判断怎么实现最合适
+      placeholder: |
+        场景：玩某些老游戏时想看显存占用，但现在显存只显示已用/总量……
+    validations:
+      required: true
+
+  - type: textarea
+    id: idea
+    attributes:
+      label: 你设想的方案（可选）
+      description: 有具体想法就写，没有也没关系
+
+  - type: dropdown
+    id: area
+    attributes:
+      label: 涉及的部分
+      multiple: true
+      options:
+        - 监测项（新增指标）
+        - 悬浮条外观 / 排版
+        - 设置窗口
+        - 帧率
+        - 性能 / 资源占用
+        - 文档
+        - 其它

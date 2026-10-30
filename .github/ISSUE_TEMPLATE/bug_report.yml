@@ -1,0 +1,76 @@
+name: 问题反馈
+description: 读数不对、功能异常、崩溃等
+title: "[Bug] "
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        感谢反馈。下面的信息越完整，定位越快——尤其是**机型**和**日志**。
+
+  - type: input
+    id: model
+    attributes:
+      label: 机型和型号
+      description: 例如 Victus 16-s0000、Omen 16-wf0xxx。风扇转速和功耗墙的行为跟机型强相关。
+      placeholder: Victus 16-s0000
+    validations:
+      required: true
+
+  - type: input
+    id: windows
+    attributes:
+      label: Windows 版本
+      description: winver 里可以看，例如 Windows 11 23H2 (22631.4169)
+      placeholder: Windows 11 23H2 (22631.4169)
+    validations:
+      required: true
+
+  - type: input
+    id: gpu
+    attributes:
+      label: 显卡
+      description: GPU 部分只支持 NVIDIA，如果是 AMD / 核显请写明
+      placeholder: RTX 4050 Laptop
+
+  - type: input
+    id: version
+    attributes:
+      label: Vitals 版本
+      description: 右键托盘 → 设置… → 关于
+      placeholder: 1.0.0
+    validations:
+      required: true
+
+  - type: checkboxes
+    id: env
+    attributes:
+      label: 运行环境
+      options:
+        - label: 已安装 PawnIO 驱动（否则 CPU 相关会显示 --）
+        - label: 启动时 UAC 点了「是」（以管理员运行）
+
+  - type: textarea
+    id: what
+    attributes:
+      label: 现象描述
+      description: 哪个指标不对 / 什么操作之后出现 / 期望是什么
+      placeholder: |
+        1. 打开游戏后，帧率一直是 -- 
+        2. 但 CPU、GPU 读数都正常
+        3. 期望显示实时帧率
+    validations:
+      required: true
+
+  - type: textarea
+    id: log
+    attributes:
+      label: Vitals.log（如果有）
+      description: 和 exe 同目录，正常不会生成；有的话把内容贴进来或直接拖文件
+      render: text
+
+  - type: input
+    id: ini
+    attributes:
+      label: 是否改过设置或 Vitals.ini
+      description: 改过的话说明改了哪些项，有助于复现
