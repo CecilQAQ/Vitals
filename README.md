@@ -1,0 +1,96 @@
+# Vitals
+
+一个极轻量的 Windows 硬件监测工具：桌面悬浮条 + 托盘提示，实时显示 **CPU / GPU 的温度、功耗、频率、占用，显存、风扇转速、磁盘与网络速率、内存、电池，以及当前窗口的帧率**。
+
+![screenshot](docs/screenshot.png)
+
+和 HP / OMEN / 惠普官方没有任何关系，纯第三方工具。
+
+---
+
+## 特点
+
+- **单文件**：一个 exe，内嵌 PresentMon 与 MSR 模块，无 DLL、无安装程序
+- **纯透明悬浮条**：只有文字、鼠标穿透，不遮挡画面；可选半透明底板
+- **跟随当前窗口**：帧率跟着前台窗口走，桌面时对应当 dwm 合成器的帧率
+- **每项独立开关**：CPU / GPU / 显存 / 风扇 / 磁盘 / 网络 / 电池 / 内存 / 帧率 都能单独关掉
+- **自定义名称**：每类标题可改成自己的型号，支持中文
+- **方案一键切换**：游戏 / 办公 / 极简，可自动按窗口切换
+- **瓶颈提示**：GPU 撞功耗墙 / 温度墙时直接在读数旁标出来
+- **曲线**：CPU/GPU 温度与功耗、帧率，各自可在读数下方画最近 60 个采样的折线
+- **占用极低**：采样在后台线程，稳态约 0.4% 单核、48 MB 内存
+
+---
+
+## 系统要求
+
+- Windows 10 / 11，64 位
+- .NET Framework 4.8（Win10 1903 以上、Win11 内置）
+- 管理员权限：读 CPU 温度必须提权，程序清单里已声明，双击会自动弹 UAC
+- 建议放在可写的普通目录（例如 `D:\Vitals`），不要放 `C:\Program Files`
+
+## 使用
+
+1. **（可选但建议）** 安装 [PawnIO](https://github.com/namazso/PawnIO) 驱动 —— 用于读取 CPU 的 MSR，
+   从而得到 CPU 温度、功耗、频率。不装也能用，只是 CPU 那几项显示 `--`。
+2. 双击 `Vitals.exe`，UAC 点"是"。
+3. 托盘出现图标，桌面左上角出现悬浮条。
+4. 右键托盘 → **设置…** 配置要显示的指标、字号、背景、位置等。
+5. 想开机静默启动（不再弹 UAC）：右键 → **开机自启 → 安装**。
+
+**快捷键**：`Ctrl+Alt+M` 显示 / 隐藏悬浮条（可在设置里关闭）。
+
+---
+
+## 数据来源
+
+| 指标 | 来源 |
+|---|---|
+| CPU 温度 / 功耗 / 频率 | PawnIO 驱动读 MSR（`0x1B1` 温度、`0x611` RAPL 能量、`0x198` 倍频） |
+| CPU 占用 | `GetSystemTimes` 差值 |
+| GPU 温度 / 功耗 / 频率 / 占用 / 显存 | NVIDIA NVML |
+| 风扇转速 | HP BIOS 的 WMI 接口（`root\wmi` → `hpqBIntM`，命令 `0x2D`） |
+| 磁盘 / 网络速率 | Windows 性能计数器（PDH，走英文计数器名，与系统语言无关） |
+| 电池 | `GetSystemPowerStatus`，放电功率走 WMI `BatteryStatus` |
+| 内存占用 | `GlobalMemoryStatusEx` |
+| 帧率 | 内嵌 [Intel PresentMon](https://github.com/GameTechDev/PresentMon)，通过 ETW 抓取 DXGI 呈现事件 |
+
+帧率采集**不注入游戏进程**，不会触发反作弊；1% low 取最近 2 秒内最慢 1% 帧的等效帧率。
+
+---
+
+## 从源码构建
+
+需要 Visual Studio 2019 / 2022（含 .NET 桌面开发工作负载），或 MSBuild + .NET Framework 4.8 目标包。
+
+```powershell
+# 1. 把 PresentMon 放到 tools/ 下（不提交进仓库，见 tools/README.md）
+#    tools/PresentMon.exe
+
+# 2. 编译
+msbuild src\Vitals.csproj /p:Configuration=Release
+```
+
+产物在 `src\bin\Release\`。
+
+`src/IntelMSR.bin` 是 PawnIO 的 MSR 模块，随源码提供（见 `THIRD-PARTY-NOTICES.md`）。
+
+---
+
+## 已知限制
+
+- **只支持 NVIDIA 显卡**：GPU 走 NVML，AMD / Intel 核显显示 `--`
+- **风扇转速只支持惠普**：走 HP BIOS 的 WMI 接口，其它品牌读不到
+- **没有显存温度**：消费级显卡基本不提供该传感器（`nvidia-smi` 里也是 N/A）
+- **需要管理员**：读 MSR 的硬性要求；即使只用 GPU / 内存部分也要提权
+- **帧率可能抓不到**：极少数自绘呈现引擎（部分 Vulkan / 私有管线）不会产生 DXGI 呈现事件
+
+---
+
+## 许可证
+
+[MIT](LICENSE)
+
+## 第三方组件
+
+见 [THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md)。

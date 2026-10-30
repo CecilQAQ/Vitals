@@ -1,0 +1,32 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net48</TargetFramework>
+    <UseWindowsForms>true</UseWindowsForms>
+    <LangVersion>7.3</LangVersion>
+    <AssemblyName>Vitals</AssemblyName>
+    <RootNamespace>Vitals</RootNamespace>
+    <ApplicationManifest>app.manifest</ApplicationManifest>
+    <ApplicationIcon>app.ico</ApplicationIcon>
+    <PlatformTarget>x64</PlatformTarget>
+    <DebugType>none</DebugType>
+    <Optimize>true</Optimize>
+    <Deterministic>true</Deterministic>
+    <Version>1.0.0</Version>
+    <Product>Vitals</Product>
+    <AssemblyTitle>Vitals 硬件监测</AssemblyTitle>
+    <NoWarn>$(NoWarn);CS0169</NoWarn>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <EmbeddedResource Include="IntelMSR.bin" LogicalName="Vitals.IntelMSR.bin" />
+    <EmbeddedResource Include="app.ico" LogicalName="Vitals.app.ico" />
+    <EmbeddedResource Include="..\tools\PresentMon.exe" LogicalName="Vitals.PresentMon.exe" Condition="Exists('..\tools\PresentMon.exe')" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Reference Include="System.Management" />
+  </ItemGroup>
+
+</Project>
